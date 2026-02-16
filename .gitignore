@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Claude files
+.claude/
+
 # Streamlit secrets and local database
 .streamlit/secrets.toml
 chat_history.db
