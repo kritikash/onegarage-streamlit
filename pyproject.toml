@@ -7,4 +7,5 @@ requires-python = ">=3.9"
 dependencies = [
     "requests>=2.32.5",
     "streamlit>=1.54.0",
+    "streamlit-mic-recorder>=0.0.8",
 ]

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import streamlit as st
 from streamlit.components.v1 import html as components_html
+from streamlit_mic_recorder import speech_to_text
 
 import db
 from api import kickoff_chat, poll_status
@@ -192,24 +193,58 @@ header[data-testid="stHeader"] { background: transparent !important; }
     align-items: stretch !important;
 }
 
-/* Chat Input — match same max-width and padding as main container */
-[data-testid="stChatFloatingInputContainer"] {
-    max-width: 860px !important; margin: 0 auto !important;
-    padding: 0 32px 14px 32px !important;
+/* ── Custom input bar (replaces st.chat_input) ── */
+.input-bar {
+    position: fixed; bottom: 0; left: 272px; right: 0;
+    z-index: 100; background: var(--bg);
+    border-top: 1px solid var(--border-lt);
+    padding: 12px 0 16px;
 }
-[data-testid="stChatInput"] {
-    border-radius: var(--r-pill) !important; border-color: var(--border) !important;
+.input-bar-inner {
+    max-width: 860px; margin: 0 auto;
+    padding: 0 32px;
+    display: flex; align-items: center; gap: 8px;
 }
-[data-testid="stChatInput"] textarea {
-    font-family: var(--f) !important; font-size: 14px !important; color: var(--t2) !important;
+.input-bar-inner .stTextInput > div { margin: 0 !important; }
+.input-bar-inner .stTextInput input {
+    border-radius: var(--r-pill) !important;
+    border: 1px solid var(--border) !important;
+    padding: 12px 20px !important;
+    font-family: var(--f) !important;
+    font-size: 14px !important;
+    color: var(--t1) !important;
+    background: var(--bg) !important;
+    height: 48px !important;
 }
-[data-testid="stChatInput"] button {
+.input-bar-inner .stTextInput input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 1px var(--accent) !important;
+}
+.input-bar-inner .stTextInput label { display: none !important; }
+/* Mic STT iframe in input bar */
+.input-bar-inner iframe[title*="speech_to_text"] {
+    width: 40px !important; height: 40px !important;
+    border: none !important; border-radius: 50% !important;
+}
+/* Send button in input bar */
+.input-bar-inner .stButton > button[data-testid="baseButton-primary"] {
+    width: 40px !important; height: 40px !important;
+    min-height: 0 !important;
+    border-radius: 50% !important;
+    padding: 0 !important;
     background: linear-gradient(135deg, #F0A8A0, #EB7A70) !important;
-    border-radius: var(--r-lg) !important; border: none !important;
+    border: none !important;
+    font-size: 18px !important;
+    display: flex !important; align-items: center !important; justify-content: center !important;
+    box-shadow: none !important;
 }
-[data-testid="stChatInput"] button svg {
-    fill: var(--accent) !important; color: var(--accent) !important;
+.input-bar-inner .stButton > button[data-testid="baseButton-primary"]:hover {
+    background: var(--accent) !important;
 }
+/* Hide stChatFloatingInputContainer if still present */
+[data-testid="stChatFloatingInputContainer"] { display: none !important; }
+/* Bottom padding so messages don't hide behind the fixed input bar */
+[data-testid="stMainBlockContainer"] { padding-bottom: 80px !important; }
 
 /* User message — dark pill, right-aligned */
 .u-row { display: flex; flex-direction: column; align-items: flex-end; padding: 6px 0; }
@@ -410,6 +445,38 @@ header[data-testid="stHeader"] { background: transparent !important; }
     transform: translateY(-1px) !important;
 }
 
+/* ── Speech Mode ── */
+.stt-section {
+    padding: 8px 16px; margin: 4px 0;
+    background: var(--accent-lt); border-radius: var(--r-sm);
+    text-align: center;
+}
+.stt-label {
+    font-family: var(--f); font-size: 11px; font-weight: 600;
+    color: var(--accent); text-transform: uppercase; letter-spacing: 0.8px;
+    margin-bottom: 6px;
+}
+.stt-hint {
+    font-family: var(--f); font-size: 11px; color: var(--t3); margin-top: 4px;
+}
+/* Pulse animation for active mic */
+@keyframes mic-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(235,23,0,0.4); }
+    70%  { box-shadow: 0 0 0 10px rgba(235,23,0,0); }
+    100% { box-shadow: 0 0 0 0 rgba(235,23,0,0); }
+}
+[data-testid="stSidebar"] .stt-active {
+    animation: mic-pulse 1.5s infinite;
+}
+
+/* Style the speech_to_text component in sidebar */
+[data-testid="stSidebar"] iframe[title="streamlit_mic_recorder.speech_to_text"] {
+    border: none !important;
+    margin: 0 auto !important;
+    display: block !important;
+}
+
+
 /* History cards */
 .hc {
     background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md);
@@ -442,6 +509,8 @@ if "tts_stop" not in st.session_state:
     st.session_state.tts_stop = False
 if "copy_text" not in st.session_state:
     st.session_state.copy_text = None
+if "speech_mode" not in st.session_state:
+    st.session_state.speech_mode = False
 
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -642,6 +711,39 @@ with st.sidebar:
         else:
             st.caption("Star a chat to save it here.")
 
+    st.divider()
+
+    # ── Speech Mode ──────────────────────────────────────
+    stt_label = "🎤  Speech Mode: ON" if st.session_state.speech_mode else "🎤  Speech Mode"
+    stt_type = "primary" if st.session_state.speech_mode else "secondary"
+    if st.button(stt_label, key="nav_stt", type=stt_type,
+                 use_container_width=True):
+        st.session_state.speech_mode = not st.session_state.speech_mode
+        st.rerun()
+
+    if st.session_state.speech_mode:
+        st.markdown(
+            '<div class="stt-section">'
+            '<div class="stt-label">🔴 Listening…</div>'
+            '<div class="stt-hint">Speak clearly, then pause to send</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        stt_text = speech_to_text(
+            language="en",
+            start_prompt="🎙️ Tap to Speak",
+            stop_prompt="⏹️ Stop Listening",
+            just_once=False,
+            use_container_width=True,
+            key="stt_widget",
+        )
+        if stt_text:
+            # Auto-navigate to chat and set the spoken text as prompt
+            st.session_state.pending_prompt = stt_text
+            if st.session_state.view != "chat":
+                st.session_state.view = "chat"
+            st.rerun()
+
 
 
 # ══════════════════════════════════════════════════════════════
@@ -696,19 +798,56 @@ def _render_chat_view() -> None:
                     st.session_state.pending_prompt = sug
                     st.rerun()
 
-    # Chat input
-    user_input = st.chat_input(
-        "Ask about innovations, explore trends, or share an idea…",
-        disabled=st.session_state.processing,
-    )
+    # ── Custom input bar: text input + mic + send ──────
+    st.markdown('<div class="input-bar"><div class="input-bar-inner">',
+                unsafe_allow_html=True)
 
-    # Pending prompt (from suggestion buttons or retry) takes priority
+    txt_col, mic_col, send_col = st.columns([14, 1.2, 1.2], gap="small")
+    with txt_col:
+        def _on_enter():
+            text = st.session_state.get("msg_text", "").strip()
+            if text:
+                st.session_state.pending_prompt = text
+                st.session_state.msg_text = ""
+
+        st.text_input(
+            "msg",
+            placeholder="Ask about innovations, explore trends, or share an idea…",
+            label_visibility="collapsed",
+            key="msg_text",
+            on_change=_on_enter,
+            disabled=st.session_state.processing,
+        )
+    with mic_col:
+        chat_stt = speech_to_text(
+            language="en",
+            start_prompt="🎤",
+            stop_prompt="⏹",
+            just_once=True,
+            use_container_width=True,
+            key="chat_stt",
+        )
+    with send_col:
+        send_clicked = st.button("⬆", type="primary", key="send_msg",
+                                 use_container_width=True,
+                                 disabled=st.session_state.processing)
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+    # Handle input from all sources
     prompt = None
+    if chat_stt:
+        st.session_state.pending_prompt = chat_stt
+        st.rerun()
+    if send_clicked:
+        text = st.session_state.get("msg_text", "").strip()
+        if text:
+            st.session_state.pending_prompt = text
+            st.session_state.msg_text = ""
+            st.rerun()
     if st.session_state.pending_prompt:
         prompt = st.session_state.pending_prompt
         st.session_state.pending_prompt = None
-    elif user_input:
-        prompt = user_input
 
     if prompt:
         if not aid:
@@ -794,7 +933,8 @@ def _render_history_view() -> None:
 # ══════════════════════════════════════════════════════════════
 
 def _inject_tts_and_clipboard() -> None:
-    """Inject JavaScript for text-to-speech and clipboard copy."""
+    """Inject JavaScript for text-to-speech, clipboard copy, and mic repositioning."""
+
 
     # ── Stop speech ──────────────────────────────────────
     if st.session_state.tts_stop:
